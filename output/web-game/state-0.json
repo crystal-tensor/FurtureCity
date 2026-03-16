@@ -1,0 +1,76 @@
+{
+  "coordinateSystem": "grid x right, y down; isometric canvas projection",
+  "time": "D1 08:43",
+  "weather": 42,
+  "policy": "balanced",
+  "population": 8183,
+  "money": 2782909,
+  "energy": {
+    "demand": 5829,
+    "adjustedDemand": 5829,
+    "supply": 5829,
+    "renewableRatio": 0.46,
+    "storageLevel": 12800,
+    "outageRisk": 0.19,
+    "priceSignal": 0.46
+  },
+  "census": {
+    "residents": 8183,
+    "shoppers": 12195,
+    "workers": 45695,
+    "leisureGuests": 13500,
+    "homes": 431,
+    "businesses": 271,
+    "factories": 703,
+    "venues": 477,
+    "solarSites": 25,
+    "bioSites": 25,
+    "storageSites": 16,
+    "fusionSites": 2
+  },
+  "topAgents": [
+    {
+      "id": "renewable_coop",
+      "name": "绿电协同社",
+      "satisfaction": 0.68,
+      "stress": 0.32,
+      "recommendation": "当前策略可接受，建议仅微调储能充放电窗口。"
+    },
+    {
+      "id": "retail_circle",
+      "name": "商圈经营团",
+      "satisfaction": 0.72,
+      "stress": 0.28,
+      "recommendation": "当前策略可接受，建议仅微调储能充放电窗口。"
+    },
+    {
+      "id": "leisure_alliance",
+      "name": "文旅场馆联盟",
+      "satisfaction": 0.74,
+      "stress": 0.26,
+      "recommendation": "当前策略可接受，建议仅微调储能充放电窗口。"
+    }
+  ],
+  "latestFeedback": [
+    {
+      "agent": "绿电协同社",
+      "severity": "info",
+      "recommendation": "当前策略可接受，建议仅微调储能充放电窗口。"
+    },
+    {
+      "agent": "城市电网中枢",
+      "severity": "info",
+      "recommendation": "保持自动平衡，继续跟踪下一时段需求斜率。"
+    }
+  ],
+  "controlCenter": {
+    "mode": "supervised",
+    "selectedHorizon": "day",
+    "peakPressure": 0.86,
+    "interventionQueue": [
+      "提高交通回收与 V2G 参与度",
+      "申请人工确认备用容量切换",
+      "人工批准工业柔性负荷合约"
+    ]
+  }
+}
