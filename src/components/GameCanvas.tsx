@@ -25,7 +25,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hoverTile, setHoverTile] = useState<{ x: number; y: number }>();
-  const [camera, setCamera] = useState({ x: 0, y: 640, zoom: 1 });
+  const [camera, setCamera] = useState({ x: 1600, y: 1600, zoom: 0.6 });
   const [isDragging, setIsDragging] = useState(false);
   const [isPainting, setIsPainting] = useState(false);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
@@ -36,6 +36,33 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     }
     return stateRef.current.grid[hoverTile.y]?.[hoverTile.x];
   }, [hoverTile, stateRef]);
+
+  const getMaxZoom = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return 4.8;
+    const mapW = stateRef.current.gridWidth * 32;
+    const mapH = stateRef.current.gridHeight * 32;
+    return Math.min(canvas.width / mapW, canvas.height / mapH) * 0.99;
+  };
+
+  // Auto-zoom to fit map on mount
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      // Calculate fit zoom
+      const mapW = stateRef.current.gridWidth * 32;
+      const mapH = stateRef.current.gridHeight * 32;
+      const fitZoom = Math.min(rect.width / mapW, rect.height / mapH) * 0.99; // 99% fit
+      
+      // Update camera to center and fit
+      setCamera({
+        x: mapW / 2,
+        y: mapH / 2,
+        zoom: Math.max(0.1, fitZoom)
+      });
+    }
+  }, []);
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -143,7 +170,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
 
     const rect = canvas.getBoundingClientRect();
     const centerX = canvas.width / 2;
-    const centerY = canvas.height / 4;
+    const centerY = canvas.height / 2;
     const mouseX = event.clientX - rect.left;
     const mouseY = event.clientY - rect.top;
     const worldX = (mouseX - centerX) / camera.zoom + camera.x;
@@ -162,17 +189,35 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   };
 
   const handleWheel = (event: React.WheelEvent) => {
+    const maxZoom = getMaxZoom();
     setCamera((previous) => ({
       ...previous,
-      zoom: Math.max(0.55, Math.min(4.8, previous.zoom - event.deltaY * 0.001)),
+      zoom: Math.max(0.1, Math.min(maxZoom, previous.zoom - event.deltaY * 0.001)),
     }));
   };
 
   const adjustZoom = (delta: number) => {
+    const maxZoom = getMaxZoom();
     setCamera((previous) => ({
       ...previous,
-      zoom: Math.max(0.55, Math.min(4.8, Number((previous.zoom + delta).toFixed(2)))),
+      zoom: Math.max(0.1, Math.min(maxZoom, Number((previous.zoom + delta).toFixed(2)))),
     }));
+  };
+
+  const fitToScreen = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const mapW = stateRef.current.gridWidth * 32;
+    const mapH = stateRef.current.gridHeight * 32;
+    const rect = canvas.getBoundingClientRect();
+    const fitZoom = Math.min(rect.width / mapW, rect.height / mapH) * 0.99;
+    
+    setCamera({
+      x: mapW / 2,
+      y: mapH / 2,
+      zoom: fitZoom
+    });
   };
 
   return (
@@ -189,6 +234,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       />
       {!readOnly && (
         <div className="canvas-zoom-controls">
+          <button type="button" className="canvas-zoom-button" onClick={fitToScreen} title="Fit to Screen">
+            Fit
+          </button>
           <button type="button" className="canvas-zoom-button" onClick={() => adjustZoom(0.2)}>
             +
           </button>

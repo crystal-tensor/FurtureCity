@@ -37,6 +37,7 @@ const EMPTY_CENSUS: Census = {
   bioSites: 0,
   storageSites: 0,
   fusionSites: 0,
+  windSites: 0,
 };
 
 function getDistrictLabel(x: number, y: number): string {
@@ -79,9 +80,25 @@ function createTile(x: number, y: number, type: TileType, population = 0): Tile 
   };
 }
 
-export function createInitialState(): GameState {
+export function generateRandomLayout(state: GameState): GameState {
   const grid: Tile[][] = [];
   let population = 0;
+
+  // Randomize Map features configuration
+  const SEASIDE_WIDTH = 8 + Math.floor(Math.random() * 8); // 8 to 15
+  const LAKE_CENTER_X = MAP_WIDTH * (0.6 + Math.random() * 0.3); // 0.6 to 0.9
+  const LAKE_CENTER_Y = MAP_HEIGHT * (0.15 + Math.random() * 0.25); // 0.15 to 0.4
+  const LAKE_RADIUS = 6 + Math.floor(Math.random() * 8); // 6 to 13
+  const RIVER_Y_START = MAP_HEIGHT * (0.4 + Math.random() * 0.4); // 0.4 to 0.8
+  const RIVER_WAVE_SPEED_1 = 0.02 + Math.random() * 0.06;
+  const RIVER_WAVE_SPEED_2 = 0.05 + Math.random() * 0.1;
+  
+  const CITY_CENTER_X = MAP_WIDTH / 2 + (Math.random() * 20 - 10);
+  const CITY_CENTER_Y = MAP_HEIGHT / 2 + (Math.random() * 20 - 10);
+  const CITY_RADIUS = 15 + Math.floor(Math.random() * 10);
+
+  const coastNoiseSeed1 = Math.random();
+  const coastNoiseSeed2 = Math.random();
 
   for (let y = 0; y < MAP_HEIGHT; y++) {
     const row: Tile[] = [];
@@ -90,102 +107,77 @@ export function createInitialState(): GameState {
       let type: TileType = 'grass';
       let tilePopulation = 0;
 
-      const isCentral = x > 5 && x < MAP_WIDTH - 5 && y > 5 && y < MAP_HEIGHT - 5;
-      const noise = Math.sin(x * 0.11) + Math.cos(y * 0.08);
-
-      if (!isCentral) {
-        if (noise > 1.15) {
-          type = 'water';
-        } else if (noise < -0.9) {
-          type = 'forest';
+      // 1. Natural Landscapes
+      
+      // Seaside (West/Left side)
+      if (x < SEASIDE_WIDTH + 4) {
+        // Irregular coastline
+        const coastNoise = Math.sin(y * (0.1 + coastNoiseSeed1 * 0.2)) * 3 + Math.cos(y * (0.3 + coastNoiseSeed2 * 0.3)) * 2;
+        if (x < SEASIDE_WIDTH - 4 + coastNoise) {
+          type = 'seaside';
+        } else if (x < SEASIDE_WIDTH - 1 + coastNoise) {
+          type = 'seaside_park'; // Beach/Sand
         }
       }
 
-      if (isCentral && type === 'grass') {
-        const isMainRoad = x % 14 === 0 || y % 14 === 0;
-        const isSecondaryRoad = (x % 9 === 0 || y % 9 === 0) && Math.abs(x - y) % 3 === 0;
-        const centerDistance = Math.hypot(x - MAP_WIDTH / 2, y - MAP_HEIGHT / 2);
-        const roll = Math.random();
+      // Lake
+      if (type === 'grass' || type === 'seaside_park') {
+        const distToLake = Math.sqrt(Math.pow(x - LAKE_CENTER_X, 2) + Math.pow(y - LAKE_CENTER_Y, 2));
+        if (distToLake < LAKE_RADIUS + Math.sin(Math.atan2(y - LAKE_CENTER_Y, x - LAKE_CENTER_X) * (3 + Math.floor(Math.random()*4))) * 3) {
+          type = 'lake';
+        }
+      }
 
-        if (isMainRoad || isSecondaryRoad) {
-          type = 'road';
-        } else if (centerDistance < 7) {
-          if (roll > 0.74) {
-            type = 'commercial';
-          } else if (roll > 0.4) {
-            type = 'park';
-          } else {
-            type = 'grass';
-          }
-        } else if (centerDistance < 17) {
-          if (roll > 0.72) {
-            type = 'residential';
-            tilePopulation = Math.floor(Math.random() * 24 + 12);
-          } else if (roll > 0.52) {
-            type = 'park';
-          } else {
-            type = 'grass';
-          }
-        } else if (centerDistance < 28) {
-          if (roll > 0.8) {
-            type = 'commercial';
-          } else if (roll > 0.58) {
-            type = 'residential';
-            tilePopulation = Math.floor(Math.random() * 18 + 8);
-          } else if (roll > 0.42) {
-            type = 'park';
-          } else {
-            type = 'grass';
-          }
-        } else {
-          if (roll > 0.84) {
-            type = 'industrial';
-          } else if (roll > 0.48) {
-            type = 'forest';
-          } else {
-            type = 'grass';
-          }
+      // River
+      if (type === 'grass' || type === 'seaside_park') {
+        const riverPathY = RIVER_Y_START + Math.sin(x * RIVER_WAVE_SPEED_1) * 15 + Math.cos(x * RIVER_WAVE_SPEED_2) * 8;
+        if (Math.abs(y - riverPathY) < 2.5 + Math.sin(x * 0.1) * 0.5) {
+          type = 'river';
+        }
+      }
+
+      // 2. City Generation
+      if (type === 'grass' || type === 'seaside_park') {
+        const distToCenter = Math.sqrt(Math.pow(x - CITY_CENTER_X, 2) + Math.pow(y - CITY_CENTER_Y, 2));
+        
+        if (distToCenter < CITY_RADIUS && x > SEASIDE_WIDTH - 2) {
+           const roll = Math.random();
+           
+           // Main Roads
+           if (x % 10 === 0 || y % 10 === 0) {
+             type = 'road';
+           } else if (distToCenter < CITY_RADIUS * 0.4) {
+             // Core: Commercial & Parks
+             if (roll > 0.8) type = 'commercial';
+             else if (roll > 0.6) type = 'park';
+             else if (roll > 0.4) type = 'residential';
+           } else {
+             // Outer: Residential & Low density
+             if (roll > 0.9) type = 'residential';
+             else if (roll > 0.8) type = 'park';
+             else if (roll > 0.95) type = 'forest';
+           }
+
+           // Populations
+           if (type === 'residential') tilePopulation = Math.floor(Math.random() * 1000 + 500);
+           if (type === 'commercial') tilePopulation = Math.floor(Math.random() * 500 + 100);
         }
 
-        if (x >= 10 && x <= 14 && y >= 12 && y <= 16) {
-          type = 'solar';
-          tilePopulation = 0;
+        // Special Facilities (Sparse placement)
+        if (Math.random() < 0.005 && distToCenter > CITY_RADIUS * 0.5) {
+            const facilities: TileType[] = ['wind', 'solar', 'bio', 'storage', 'stadium'];
+            type = facilities[Math.floor(Math.random() * facilities.length)];
         }
 
-        if (x >= 82 && x <= 86 && y >= 80 && y <= 84) {
-          type = 'bio';
-          tilePopulation = 0;
+        // Industrial far out
+        if (x > MAP_WIDTH * 0.8 && y > MAP_HEIGHT * 0.8 && Math.random() > 0.85) {
+          type = 'industrial';
         }
+      }
 
-        if (x >= 88 && x <= 91 && y >= 18 && y <= 21) {
-          type = 'storage';
-          tilePopulation = 0;
-        }
-
-        if ((x === 8 && y === 8) || (x === MAP_WIDTH - 9 && y === MAP_HEIGHT - 9)) {
-          type = 'power';
-          tilePopulation = 0;
-        }
-
-        if (x >= 38 && x <= 42 && y >= 12 && y <= 15) {
-          type = 'stadium';
-          tilePopulation = 0;
-        }
-
-        if (x >= 12 && x <= 16 && y >= 62 && y <= 66) {
-          type = 'amusement_park';
-          tilePopulation = 0;
-        }
-
-        if (x >= 6 && x <= 13 && y >= 44 && y <= 49) {
-          type = 'seaside_park';
-          tilePopulation = 0;
-        }
-
-        if (x >= 5 && x <= 9 && y >= 52 && y <= 57) {
-          type = 'marina';
-          tilePopulation = 0;
-        }
+      // Bridges over water for roads
+      if (type === 'river' && (x % 10 === 0)) {
+        type = 'bridge';
       }
 
       row.push(createTile(x, y, type, tilePopulation));
@@ -196,9 +188,98 @@ export function createInitialState(): GameState {
   }
 
   return {
+    ...state,
     grid,
-    money: 2750000,
     population,
+  };
+}
+
+export function autoLayoutCity(state: GameState): GameState {
+  const grid: Tile[][] = [];
+  let population = 0;
+
+  const isNatural = (t: TileType) => ['water', 'river', 'lake', 'seaside', 'seaside_park', 'marina', 'forest'].includes(t);
+
+  // Constants for block generation
+  const BLOCK_SIZE = 7;
+
+  for (let y = 0; y < MAP_HEIGHT; y++) {
+    const row: Tile[] = [];
+    for (let x = 0; x < MAP_WIDTH; x++) {
+      const originalTile = state.grid[y] && state.grid[y][x];
+      let type: TileType = originalTile && isNatural(originalTile.type) ? originalTile.type : 'grass';
+      let tilePopulation = 0;
+
+      // Plan alternating roads
+      const isRoadX = x % BLOCK_SIZE === 0;
+      const isRoadY = y % BLOCK_SIZE === 0;
+      
+      if (isRoadX || isRoadY) {
+        if (type === 'grass') {
+          type = 'road';
+        } else if (['water', 'river', 'lake'].includes(type)) {
+          type = 'bridge';
+        }
+      } else if (type === 'grass') {
+        // Determine block type based on block coordinates
+        const blockX = Math.floor(x / BLOCK_SIZE);
+        const blockY = Math.floor(y / BLOCK_SIZE);
+        
+        // Pseudo-random but deterministic based on block coordinates
+        const noise = (Math.sin(blockX * 12.9898 + blockY * 78.233) * 43758.5453) % 1;
+        const absNoise = Math.abs(noise);
+
+        // Distance from center for zoning
+        const distToCenter = Math.sqrt(Math.pow(x - MAP_WIDTH / 2, 2) + Math.pow(y - MAP_HEIGHT / 2, 2));
+        
+        if (absNoise < 0.15) {
+          // Oasis (绿洲)
+          type = Math.random() > 0.5 ? 'park' : 'forest';
+        } else if (distToCenter < MAP_WIDTH * 0.25) {
+          // Commercial / Leisure Center
+          if (absNoise < 0.25) {
+            type = 'amusement_park';
+          } else if (absNoise < 0.35) {
+            type = 'stadium';
+          } else {
+            type = 'commercial';
+            tilePopulation = Math.floor(Math.random() * 500 + 100);
+          }
+        } else if (distToCenter > MAP_WIDTH * 0.35 && (blockX + blockY) % 5 === 0) {
+          // Industrial & Power outer ring
+          if (absNoise < 0.4) type = 'power';
+          else if (absNoise < 0.5) type = 'solar';
+          else if (absNoise < 0.6) type = 'wind';
+          else type = 'industrial';
+        } else {
+          // Residential
+          if (absNoise < 0.85) {
+            type = 'residential';
+            tilePopulation = Math.floor(Math.random() * 1000 + 500);
+          } else {
+            type = 'park'; // small community parks
+          }
+        }
+      }
+
+      row.push(createTile(x, y, type, tilePopulation));
+      population += tilePopulation;
+    }
+    grid.push(row);
+  }
+
+  return {
+    ...state,
+    grid,
+    population,
+  };
+}
+
+export function createInitialState(): GameState {
+  const emptyState: GameState = {
+    grid: [],
+    money: 2750000,
+    population: 0,
     time: 7 * 60,
     gridWidth: MAP_WIDTH,
     gridHeight: MAP_HEIGHT,
@@ -208,11 +289,13 @@ export function createInitialState(): GameState {
     autoBalance: true,
     energy: BASE_ENERGY,
     agents: [],
-    feedback: [],
     mappings: [],
     census: EMPTY_CENSUS,
     forecast: [],
+    feedback: [],
   };
+
+  return generateRandomLayout(emptyState);
 }
 
 export function placeBuilding(state: GameState, x: number, y: number, type: TileType): GameState {
@@ -264,46 +347,7 @@ export function placeBuilding(state: GameState, x: number, y: number, type: Tile
   };
 }
 
-export function autoLayoutRoads(state: GameState): GameState {
-  const next = JSON.parse(JSON.stringify(state)) as GameState;
 
-  for (let y = 0; y < next.gridHeight; y += 1) {
-    for (let x = 0; x < next.gridWidth; x += 1) {
-      const tile = next.grid[y][x];
-      if (tile.type === 'road') {
-        tile.type = 'grass';
-      }
-      if (tile.type === 'bridge') {
-        tile.type = 'water';
-      }
-    }
-  }
-
-  const safeToRoute = (type: TileType) =>
-    type === 'grass' || type === 'forest' || type === 'water' || type === 'road' || type === 'bridge';
-
-  const placeRoute = (x: number, y: number) => {
-    const tile = next.grid[y]?.[x];
-    if (!tile || !safeToRoute(tile.type)) {
-      return;
-    }
-    tile.type = tile.type === 'water' ? 'bridge' : 'road';
-  };
-
-  for (let y = 8; y < next.gridHeight - 8; y += 8) {
-    for (let x = 6; x < next.gridWidth - 6; x += 1) {
-      placeRoute(x, y);
-    }
-  }
-
-  for (let x = 8; x < next.gridWidth - 8; x += 8) {
-    for (let y = 6; y < next.gridHeight - 6; y += 1) {
-      placeRoute(x, y);
-    }
-  }
-
-  return next;
-}
 
 export function getCost(type: TileType): number {
   switch (type) {
@@ -350,4 +394,56 @@ export function getCost(type: TileType): number {
     default:
       return 0;
   }
+}
+
+export function saveMapToStorage(state: GameState, name: string): void {
+  try {
+    const historyJson = localStorage.getItem('simcity_map_history');
+    const history = historyJson ? JSON.parse(historyJson) : [];
+    
+    // Create a lean version of state to save storage space
+    const savedMap = {
+      name: name || `Map ${new Date().toLocaleString()}`,
+      timestamp: Date.now(),
+      state: {
+        grid: state.grid,
+        money: state.money,
+        population: state.population,
+        gridWidth: state.gridWidth,
+        gridHeight: state.gridHeight,
+      }
+    };
+    
+    history.push(savedMap);
+    
+    // Keep only last 10 maps to avoid quota issues
+    if (history.length > 10) {
+      history.shift();
+    }
+    
+    localStorage.setItem('simcity_map_history', JSON.stringify(history));
+  } catch (e) {
+    console.error("Failed to save map", e);
+  }
+}
+
+export function getMapHistory(): Array<{name: string, timestamp: number, state: Partial<GameState>}> {
+  try {
+    const historyJson = localStorage.getItem('simcity_map_history');
+    return historyJson ? JSON.parse(historyJson) : [];
+  } catch (e) {
+    console.error("Failed to load map history", e);
+    return [];
+  }
+}
+
+export function restoreMapFromHistory(currentState: GameState, savedState: Partial<GameState>): GameState {
+  return {
+    ...currentState,
+    grid: savedState.grid || currentState.grid,
+    money: savedState.money || currentState.money,
+    population: savedState.population || currentState.population,
+    gridWidth: savedState.gridWidth || currentState.gridWidth,
+    gridHeight: savedState.gridHeight || currentState.gridHeight,
+  };
 }

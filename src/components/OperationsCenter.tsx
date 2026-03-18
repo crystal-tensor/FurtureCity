@@ -1,7 +1,7 @@
 import React, { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import GameCanvas from './GameCanvas';
-import { autoLayoutRoads, createInitialState } from '../game/grid';
-import { deriveOperationsSnapshot } from '../game/operations';
+import { createInitialState, generateRandomLayout, autoLayoutCity, getMapHistory, restoreMapFromHistory, saveMapToStorage } from '../game/grid';
+import { deriveOperationsSnapshot, simulateOasisPressureTest } from '../game/operations';
 import { getTimeLabel, renderStateSummary, setPolicy, tick, updateWeather } from '../game/simulation';
 import type {
   FeedbackEntry,
@@ -10,8 +10,12 @@ import type {
   HorizonKey,
   InterventionPlan,
   OperationsControls,
+  OperationsSnapshot,
   Tile,
   TileType,
+  OasisSimulationResult,
+  OasisAgent,
+  AgentDomain,
 } from '../game/types';
 
 declare global {
@@ -138,7 +142,10 @@ function FlowMatrix({
 }: {
   generation: {
     solar: number;
-    fusion: number;
+    nuclear: number;
+    thermal: number;
+    hydro: number;
+    wind: number;
     bio: number;
     storageDischarge: number;
     recovery: number;
@@ -153,21 +160,29 @@ function FlowMatrix({
   storageLevel: number;
 }) {
   const nodes = {
-    solar: { x: 100, y: 82, label: '光伏阵列', value: generation.solar, tone: 'solar' },
-    fusion: { x: 100, y: 172, label: '聚变基座', value: generation.fusion, tone: 'fusion' },
-    bio: { x: 100, y: 262, label: '生物质站', value: generation.bio, tone: 'bio' },
-    recovery: { x: 100, y: 352, label: '回收回路', value: generation.recovery, tone: 'recovery' },
-    grid: { x: 360, y: 210, label: '主母线', value: generation.solar + generation.fusion + generation.bio, tone: 'grid' },
-    storage: { x: 360, y: 352, label: '储能云仓', value: storageLevel, tone: 'storage' },
-    housing: { x: 640, y: 96, label: '住宅', value: demand.residential, tone: 'load' },
-    commerce: { x: 640, y: 186, label: '商业', value: demand.commercial, tone: 'load' },
-    industry: { x: 640, y: 276, label: '工业', value: demand.industrial, tone: 'load' },
-    mobility: { x: 640, y: 366, label: '交通/公共', value: demand.mobility + demand.civic, tone: 'load' },
+    thermal: { x: 100, y: 70, label: '火电基座', value: generation.thermal, tone: 'thermal' },
+    hydro: { x: 100, y: 160, label: '水电站', value: generation.hydro, tone: 'hydro' },
+    nuclear: { x: 100, y: 250, label: '核电站', value: generation.nuclear, tone: 'nuclear' },
+    wind: { x: 100, y: 340, label: '风力场', value: generation.wind, tone: 'wind' },
+    solar: { x: 100, y: 430, label: '光伏阵列', value: generation.solar, tone: 'solar' },
+    bio: { x: 100, y: 520, label: '生物质站', value: generation.bio, tone: 'bio' },
+    recovery: { x: 100, y: 610, label: '回收回路', value: generation.recovery, tone: 'recovery' },
+    
+    grid: { x: 360, y: 340, label: '主母线', value: generation.thermal + generation.hydro + generation.nuclear + generation.wind + generation.solar + generation.bio, tone: 'grid' },
+    storage: { x: 360, y: 520, label: '储能云仓', value: storageLevel, tone: 'storage' },
+    
+    housing: { x: 640, y: 130, label: '住宅', value: demand.residential, tone: 'load' },
+    commerce: { x: 640, y: 270, label: '商业', value: demand.commercial, tone: 'load' },
+    industry: { x: 640, y: 410, label: '工业', value: demand.industrial, tone: 'load' },
+    mobility: { x: 640, y: 550, label: '交通/公共', value: demand.mobility + demand.civic, tone: 'load' },
   } as const;
 
   const links = [
+    ['thermal', 'grid', generation.thermal],
+    ['hydro', 'grid', generation.hydro],
+    ['nuclear', 'grid', generation.nuclear],
+    ['wind', 'grid', generation.wind],
     ['solar', 'grid', generation.solar],
-    ['fusion', 'grid', generation.fusion],
     ['bio', 'grid', generation.bio],
     ['recovery', 'storage', generation.recovery],
     ['storage', 'grid', generation.storageDischarge],
@@ -178,7 +193,7 @@ function FlowMatrix({
   ] as const;
 
   return (
-    <svg viewBox="0 0 760 440" className="flow-matrix" role="img" aria-label="energy flow diagram">
+    <svg viewBox="0 0 760 700" className="flow-matrix" role="img" aria-label="energy flow diagram">
       <defs>
         <linearGradient id="flowA" x1="0%" x2="100%">
           <stop offset="0%" stopColor="#5de2ff" />
@@ -193,7 +208,8 @@ function FlowMatrix({
         const source = nodes[sourceKey];
         const target = nodes[targetKey];
         const curveX = (source.x + target.x) / 2;
-        const width = Math.max(2, value / 800);
+        // Adjusted scaling factor for high-load scenarios (1M population) to prevent SVG stroke overflow
+        const width = Math.max(1, Math.min(value / 12000, 24));
         return (
           <path
             key={`${sourceKey}-${targetKey}`}
@@ -250,6 +266,12 @@ const OperationsCenter: React.FC = () => {
   const gameStateRef = useRef<GameState>(bootstrapState());
   const [snapshot, setSnapshot] = useState<GameState>(() => gameStateRef.current);
   const [controls, setControls] = useState<OperationsControls>(CONTROL_DEFAULTS);
+  const [draftControls, setDraftControls] = useState<OperationsControls>(CONTROL_DEFAULTS);
+  const [testResults, setTestResults] = useState<OperationsSnapshot | null>(null);
+  const [oasisResults, setOasisResults] = useState<OasisSimulationResult | null>(null);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [testTab, setTestTab] = useState<'manual' | 'auto'>('manual');
+
   const [page, setPage] = useState<'ops' | 'city'>('ops');
   const [selectedHorizon, setSelectedHorizon] = useState<HorizonKey>('day');
   const [showEnergyFlow, setShowEnergyFlow] = useState(true);
@@ -265,6 +287,28 @@ const OperationsCenter: React.FC = () => {
     startTransition(() => {
       setSnapshot({ ...gameStateRef.current });
     });
+  };
+
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [mapHistory, setMapHistory] = useState<Array<{name: string, timestamp: number, state: any}>>([]);
+
+  const handleSaveMap = () => {
+    const name = prompt("请输入地图名称：", `Map ${new Date().toLocaleString()}`);
+    if (name) {
+      saveMapToStorage(gameStateRef.current, name);
+      alert("地图保存成功！");
+    }
+  };
+
+  const handleOpenHistory = () => {
+    setMapHistory(getMapHistory());
+    setShowHistoryModal(true);
+  };
+
+  const handleRestoreMap = (savedState: any) => {
+    gameStateRef.current = restoreMapFromHistory(gameStateRef.current, savedState);
+    syncUi();
+    setShowHistoryModal(false);
   };
 
   useEffect(() => {
@@ -371,8 +415,11 @@ const OperationsCenter: React.FC = () => {
   };
 
   const totalGeneration =
+    operations.generation.thermal +
+    operations.generation.hydro +
+    operations.generation.nuclear +
+    operations.generation.wind +
     operations.generation.solar +
-    operations.generation.fusion +
     operations.generation.bio +
     operations.generation.storageDischarge +
     operations.generation.recovery;
@@ -428,7 +475,7 @@ const OperationsCenter: React.FC = () => {
                   </div>
                   <div className="hero-metric">
                     <span>人口总量</span>
-                    <strong>{snapshot.population.toLocaleString()}</strong>
+                    <strong>{Math.round(snapshot.population * (1 + draftControls.populationDrift / 100)).toLocaleString()}</strong>
                   </div>
                   <div className="hero-metric">
                     <span>运行模式</span>
@@ -554,8 +601,11 @@ const OperationsCenter: React.FC = () => {
                   <span className="tiny-meta">单位: 等效 MWh</span>
                 </div>
                 <div className="mini-bars">
+                  <MiniBar title="火电" value={operations.generation.thermal} total={totalGeneration} tone="tone-thermal" />
+                  <MiniBar title="水电" value={operations.generation.hydro} total={totalGeneration} tone="tone-hydro" />
+                  <MiniBar title="核电" value={operations.generation.nuclear} total={totalGeneration} tone="tone-nuclear" />
+                  <MiniBar title="风电" value={operations.generation.wind} total={totalGeneration} tone="tone-wind" />
                   <MiniBar title="光伏" value={operations.generation.solar} total={totalGeneration} tone="tone-solar" />
-                  <MiniBar title="聚变" value={operations.generation.fusion} total={totalGeneration} tone="tone-fusion" />
                   <MiniBar title="生物质" value={operations.generation.bio} total={totalGeneration} tone="tone-bio" />
                   <MiniBar
                     title="储能放电"
@@ -636,16 +686,16 @@ const OperationsCenter: React.FC = () => {
           <aside className="ops-side-column">
             <div className="glass-card control-card">
               <div className="section-title-row">
-                <h2>情境调参</h2>
-                <span className="tiny-meta">人口 / 天气 / 交通 / 活动</span>
+                <h2>压力测试</h2>
+                <span className="tiny-meta">设定未来参数以评估风险</span>
               </div>
               <div className="slider-stack">
                 {[
-                  ['人口增长预期', 'populationDrift', controls.populationDrift, '%'],
-                  ['天气波动', 'weatherVolatility', controls.weatherVolatility, '%'],
-                  ['交通压力', 'trafficLoad', controls.trafficLoad, '%'],
-                  ['工业扩张', 'industrialLoad', controls.industrialLoad, '%'],
-                  ['活动负荷', 'eventLoad', controls.eventLoad, '%'],
+                  ['人口增长预期', 'populationDrift', draftControls.populationDrift, '%'],
+                  ['天气波动', 'weatherVolatility', draftControls.weatherVolatility, '%'],
+                  ['交通压力', 'trafficLoad', draftControls.trafficLoad, '%'],
+                  ['工业扩张', 'industrialLoad', draftControls.industrialLoad, '%'],
+                  ['活动负荷', 'eventLoad', draftControls.eventLoad, '%'],
                 ].map(([label, key, value, suffix]) => (
                   <label key={key} className="slider-row">
                     <div className="slider-head">
@@ -661,7 +711,7 @@ const OperationsCenter: React.FC = () => {
                       max={100}
                       value={Number(value)}
                       onChange={(event) =>
-                        setControls((current) => ({
+                        setDraftControls((current) => ({
                           ...current,
                           [key]: Number(event.target.value),
                         }))
@@ -672,15 +722,15 @@ const OperationsCenter: React.FC = () => {
                 <label className="slider-row">
                   <div className="slider-head">
                     <span>AI 呼叫人工阈值</span>
-                    <strong>{Math.round(controls.alertThreshold * 100)}%</strong>
+                    <strong>{Math.round(draftControls.alertThreshold * 100)}%</strong>
                   </div>
                   <input
                     type="range"
                     min={55}
                     max={95}
-                    value={Math.round(controls.alertThreshold * 100)}
+                    value={Math.round(draftControls.alertThreshold * 100)}
                     onChange={(event) =>
-                      setControls((current) => ({
+                      setDraftControls((current) => ({
                         ...current,
                         alertThreshold: Number(event.target.value) / 100,
                       }))
@@ -700,6 +750,120 @@ const OperationsCenter: React.FC = () => {
                     onChange={(event) => applyWeather(Number(event.target.value))}
                   />
                 </label>
+
+                <button
+                  type="button"
+                  className="accent-button full-width"
+                  style={{ marginTop: '16px', width: '100%', justifyContent: 'center' }}
+                  disabled={isSimulating}
+                  onClick={async () => {
+                    setIsSimulating(true);
+                    setTestResults(null);
+                    setOasisResults(null);
+                    try {
+                      // 1. Run basic pressure test
+                      const results = deriveOperationsSnapshot(gameStateRef.current, draftControls);
+                      setTestResults(results);
+
+                      // 2. Run OASIS Agent Simulation
+                      const oasisSim = await simulateOasisPressureTest(draftControls);
+                      setOasisResults(oasisSim);
+                    } finally {
+                      setIsSimulating(false);
+                    }
+                  }}
+                >
+                  {isSimulating ? 'OASIS 推演中...' : '开始测试'}
+                </button>
+
+                {isSimulating && (
+                   <div style={{ textAlign: 'center', padding: '20px', color: 'rgba(255,255,255,0.6)' }}>
+                     <div className="spinner" style={{ marginBottom: '10px' }}></div>
+                     <small>正在初始化 22 类 Agent 并推演社会行为...</small>
+                   </div>
+                )}
+
+                {testResults && oasisResults && (
+                  <div className="test-results-panel" style={{ marginTop: '24px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '16px' }}>
+                    <div className="section-title-row" style={{ marginBottom: '12px' }}>
+                      <h3>测试报告</h3>
+                      <div className="page-switch" style={{ margin: 0 }}>
+                        <button
+                          type="button"
+                          className={testTab === 'manual' ? 'nav-chip active' : 'nav-chip'}
+                          onClick={() => setTestTab('manual')}
+                          style={{ fontSize: '12px', padding: '4px 12px' }}
+                        >
+                          人工
+                        </button>
+                        <button
+                          type="button"
+                          className={testTab === 'auto' ? 'nav-chip active' : 'nav-chip'}
+                          onClick={() => setTestTab('auto')}
+                          style={{ fontSize: '12px', padding: '4px 12px' }}
+                        >
+                          AI
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="ai-list">
+                      {testTab === 'manual' ? (
+                        testResults.interventions.length > 0 ? (
+                          testResults.interventions.map((plan) => (
+                            <div key={plan.id} className="ai-item human">
+                              <strong>{plan.title}</strong>
+                              <p>{plan.reason}</p>
+                              <small>{plan.impact}</small>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="ai-item quiet">
+                            <strong>无人工介入项</strong>
+                            <p>在此压力环境下，AI 可完全自主应对。</p>
+                          </div>
+                        )
+                      ) : testResults.resolvedAutomatically.length > 0 ? (
+                        testResults.resolvedAutomatically.map((plan) => (
+                          <div key={plan.id} className="ai-item resolved">
+                            <strong>{plan.title}</strong>
+                            <p>{plan.reason}</p>
+                            <small>{plan.impact}</small>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="ai-item quiet">
+                          <strong>无自动处理项</strong>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* OASIS Social Feed Preview in Test Report */}
+                    <div style={{ marginTop: '16px', padding: '12px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                        <h4 style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px', textTransform: 'uppercase' }}>OASIS 舆情采样</h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {oasisResults.steps.flatMap(s => s.socialFeed).slice(0, 3).map((feed, i) => (
+                                <div key={i} style={{ fontSize: '11px', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                                    <span style={{ color: '#4cc2ff', whiteSpace: 'nowrap' }}>@{feed.agentName}:</span>
+                                    <span style={{ opacity: 0.9 }}>{feed.content}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="stress-grid" style={{ marginTop: '16px', gridTemplateColumns: '1fr' }}>
+                       {testResults.stressTests.filter(t => t.severity !== 'info').map(scenario => (
+                          <div key={scenario.id} className={`stress-card ${scenario.severity}`} style={{ padding: '12px' }}>
+                            <div className="stress-head">
+                              <strong>{scenario.title}</strong>
+                              <span>{scenario.pressure.toFixed(2)}</span>
+                            </div>
+                            <small style={{ display: 'block', marginTop: '4px', opacity: 0.8 }}>{scenario.aiAction}</small>
+                          </div>
+                       ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -737,6 +901,48 @@ const OperationsCenter: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {oasisResults && (
+              <div className="glass-card">
+                <div className="section-title-row">
+                  <h2>OASIS 城市社群模拟 (20+ Agent 组)</h2>
+                  <span className="tiny-meta">基于 LLM 的微观行为涌现</span>
+                </div>
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                  <div className="agent-group-stat">
+                     <h4 style={{ fontSize: '12px', color: '#4cc2ff', marginBottom: '8px' }}>居民与社区</h4>
+                     {oasisResults.steps[23]?.activeAgents.filter(a => a.domain === 'Residential').slice(0,3).map(a => (
+                        <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '4px' }}>
+                          <span>{a.name}</span>
+                          <span style={{ color: a.satisfaction < 60 ? '#ff4c4c' : '#4cffb0' }}>满意度 {Math.round(a.satisfaction)}%</span>
+                        </div>
+                     ))}
+                  </div>
+                  <div className="agent-group-stat">
+                     <h4 style={{ fontSize: '12px', color: '#ffb04c', marginBottom: '8px' }}>工业与制造</h4>
+                     {oasisResults.steps[23]?.activeAgents.filter(a => a.domain === 'Industrial').slice(0,3).map(a => (
+                        <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '4px' }}>
+                          <span>{a.name}</span>
+                          <span style={{ color: a.satisfaction < 60 ? '#ff4c4c' : '#4cffb0' }}>满意度 {Math.round(a.satisfaction)}%</span>
+                        </div>
+                     ))}
+                  </div>
+                </div>
+
+                <div className="social-feed-container" style={{ height: '200px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', padding: '12px', borderRadius: '8px' }}>
+                   {oasisResults.steps.flatMap(s => s.socialFeed).reverse().map((feed, idx) => (
+                      <div key={idx} style={{ marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <strong style={{ fontSize: '12px', color: '#fff' }}>{feed.agentName}</strong>
+                          <span style={{ fontSize: '10px', opacity: 0.6 }}>❤️ {feed.likes}</span>
+                        </div>
+                        <p style={{ fontSize: '11px', opacity: 0.9, margin: 0, lineHeight: '1.4' }}>{feed.content}</p>
+                      </div>
+                   ))}
+                </div>
+              </div>
+            )}
 
             <div className="glass-card mini-city-card">
               <div className="section-title-row">
@@ -804,6 +1010,12 @@ const OperationsCenter: React.FC = () => {
             <div className="section-title-row">
               <h2>城市沙盘</h2>
               <div className="page-switch">
+                <button type="button" className="nav-chip" onClick={handleSaveMap}>
+                  保存地图
+                </button>
+                <button type="button" className="nav-chip" onClick={handleOpenHistory}>
+                  历史记录
+                </button>
                 <button type="button" className="nav-chip" onClick={() => setShowEnergyFlow((current) => !current)}>
                   {showEnergyFlow ? '隐藏能流' : '显示能流'}
                 </button>
@@ -811,11 +1023,21 @@ const OperationsCenter: React.FC = () => {
                   type="button"
                   className="nav-chip"
                   onClick={() => {
-                    gameStateRef.current = autoLayoutRoads(gameStateRef.current);
+                    gameStateRef.current = generateRandomLayout(gameStateRef.current);
                     syncUi();
                   }}
                 >
-                  AI 重新布路
+                  随机地图
+                </button>
+                <button
+                  type="button"
+                  className="nav-chip"
+                  onClick={() => {
+                    gameStateRef.current = autoLayoutCity(gameStateRef.current);
+                    syncUi();
+                  }}
+                >
+                  AI 布局
                 </button>
               </div>
             </div>
@@ -922,6 +1144,34 @@ const OperationsCenter: React.FC = () => {
             </div>
           </aside>
         </main>
+      )}
+
+      {showHistoryModal && (
+        <div className="modal-overlay" onClick={() => setShowHistoryModal(false)}>
+          <div className="modal-content glass-card" onClick={e => e.stopPropagation()}>
+            <h2>地图历史记录</h2>
+            {mapHistory.length === 0 ? (
+              <p>暂无保存的地图记录</p>
+            ) : (
+              <ul className="history-list">
+                {mapHistory.map((item, index) => (
+                  <li key={index} className="history-item">
+                    <div className="history-info">
+                      <strong>{item.name}</strong>
+                      <span className="tiny-meta">{new Date(item.timestamp).toLocaleString()}</span>
+                    </div>
+                    <button className="btn-primary" onClick={() => handleRestoreMap(item.state)}>
+                      恢复此地图
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button className="btn-secondary" style={{marginTop: '16px', width: '100%'}} onClick={() => setShowHistoryModal(false)}>
+              关闭
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

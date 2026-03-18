@@ -11,7 +11,527 @@ import type {
   OperationsSnapshot,
   Severity,
   StressScenario,
+  OasisAgent,
+  OasisSimulationResult,
+  OasisSimulationStep,
+  AgentAction,
+  AgentActionType,
+  AgentDomain,
 } from './types';
+
+// --- OASIS Agent Simulation Implementation ---
+
+const AGENT_TEMPLATES: Omit<OasisAgent, 'recentActions' | 'lastThought'>[] = [
+  // 1. Residential & Community
+  {
+    id: 'res-low-income',
+    name: '低收入家庭',
+    domain: 'Residential',
+    description: '对电价极度敏感，宁愿忍受高温也会关闭空调。',
+    count: 150000,
+    satisfaction: 70,
+    stress: 40,
+    energyConsumption: 0.4,
+    priceSensitivity: 0.95,
+    comfortPriority: 0.3,
+    flexibility: 0.8,
+    socialInfluence: 0.2,
+  },
+  {
+    id: 'res-middle-class',
+    name: '中产通勤族',
+    domain: 'Residential',
+    description: '关注舒适度，拥有电动汽车，晚高峰集中用电。',
+    count: 300000,
+    satisfaction: 80,
+    stress: 30,
+    energyConsumption: 1.2,
+    priceSensitivity: 0.6,
+    comfortPriority: 0.8,
+    flexibility: 0.4,
+    socialInfluence: 0.6,
+  },
+  {
+    id: 'res-high-net',
+    name: '高净值别墅',
+    domain: 'Residential',
+    description: '电价不敏感，全天候中央空调，可能有光伏储能。',
+    count: 50000,
+    satisfaction: 90,
+    stress: 10,
+    energyConsumption: 3.5,
+    priceSensitivity: 0.1,
+    comfortPriority: 1.0,
+    flexibility: 0.2,
+    socialInfluence: 0.8,
+  },
+  {
+    id: 'res-remote-worker',
+    name: '居家办公者',
+    domain: 'Residential',
+    description: '全天平稳负荷，对断电零容忍。',
+    count: 100000,
+    satisfaction: 75,
+    stress: 50,
+    energyConsumption: 1.0,
+    priceSensitivity: 0.5,
+    comfortPriority: 0.9,
+    flexibility: 0.3,
+    socialInfluence: 0.5,
+  },
+  {
+    id: 'res-old-community',
+    name: '老旧小区物业',
+    domain: 'Residential',
+    description: '线路老化，易跳闸，对改造政策敏感。',
+    count: 200,
+    satisfaction: 60,
+    stress: 70,
+    energyConsumption: 5.0,
+    priceSensitivity: 0.7,
+    comfortPriority: 0.4,
+    flexibility: 0.1,
+    socialInfluence: 0.4,
+  },
+
+  // 2. Industrial & Manufacturing
+  {
+    id: 'ind-heavy',
+    name: '重工业 (钢铁/化工)',
+    domain: 'Industrial',
+    description: '高耗能，停工成本大，可能违规用电。',
+    count: 50,
+    satisfaction: 65,
+    stress: 60,
+    energyConsumption: 100.0,
+    priceSensitivity: 0.4,
+    comfortPriority: 0.1,
+    flexibility: 0.1,
+    socialInfluence: 0.7,
+  },
+  {
+    id: 'ind-precision',
+    name: '精密制造 (半导体)',
+    domain: 'Industrial',
+    description: '电能质量要求极高，愿付高价保供。',
+    count: 30,
+    satisfaction: 85,
+    stress: 20,
+    energyConsumption: 80.0,
+    priceSensitivity: 0.2,
+    comfortPriority: 0.0,
+    flexibility: 0.0,
+    socialInfluence: 0.6,
+  },
+  {
+    id: 'ind-flexible',
+    name: '柔性代工厂',
+    domain: 'Industrial',
+    description: '生产有弹性，愿为电费折扣调整班次。',
+    count: 200,
+    satisfaction: 70,
+    stress: 50,
+    energyConsumption: 40.0,
+    priceSensitivity: 0.9,
+    comfortPriority: 0.0,
+    flexibility: 0.9,
+    socialInfluence: 0.3,
+  },
+  {
+    id: 'ind-datacenter',
+    name: '数据中心',
+    domain: 'Industrial',
+    description: '耗电大户，负载平稳，可调用 UPS 调节。',
+    count: 15,
+    satisfaction: 80,
+    stress: 30,
+    energyConsumption: 150.0,
+    priceSensitivity: 0.3,
+    comfortPriority: 0.0,
+    flexibility: 0.2,
+    socialInfluence: 0.5,
+  },
+
+  // 3. Commercial & Services
+  {
+    id: 'com-mall',
+    name: '超级商业综合体',
+    domain: 'Commercial',
+    description: '照明空调负荷大，客流决定耗电。',
+    count: 40,
+    satisfaction: 75,
+    stress: 40,
+    energyConsumption: 60.0,
+    priceSensitivity: 0.5,
+    comfortPriority: 0.9,
+    flexibility: 0.3,
+    socialInfluence: 0.8,
+  },
+  {
+    id: 'com-retail',
+    name: '街边小微商户',
+    domain: 'Commercial',
+    description: '利润薄，电价上涨时可能缩短营业。',
+    count: 5000,
+    satisfaction: 60,
+    stress: 80,
+    energyConsumption: 2.0,
+    priceSensitivity: 0.9,
+    comfortPriority: 0.6,
+    flexibility: 0.7,
+    socialInfluence: 0.4,
+  },
+  {
+    id: 'com-hotel',
+    name: '星级酒店',
+    domain: 'Commercial',
+    description: '必须维持高体验，难削减负荷。',
+    count: 80,
+    satisfaction: 85,
+    stress: 25,
+    energyConsumption: 30.0,
+    priceSensitivity: 0.2,
+    comfortPriority: 1.0,
+    flexibility: 0.1,
+    socialInfluence: 0.6,
+  },
+  {
+    id: 'com-office',
+    name: '写字楼运营方',
+    domain: 'Commercial',
+    description: '可控温控光，响应节能倡议求 ESG 评分。',
+    count: 300,
+    satisfaction: 70,
+    stress: 45,
+    energyConsumption: 50.0,
+    priceSensitivity: 0.4,
+    comfortPriority: 0.7,
+    flexibility: 0.6,
+    socialInfluence: 0.5,
+  },
+
+  // 4. Mobility & Infrastructure
+  {
+    id: 'mob-metro',
+    name: '城市地铁调度',
+    domain: 'Mobility',
+    description: '早晚高峰负荷高，可调发车频次。',
+    count: 10,
+    satisfaction: 80,
+    stress: 60,
+    energyConsumption: 200.0,
+    priceSensitivity: 0.1,
+    comfortPriority: 0.5,
+    flexibility: 0.3,
+    socialInfluence: 0.9,
+  },
+  {
+    id: 'mob-bus',
+    name: '电动公交车队',
+    domain: 'Mobility',
+    description: '夜间充电，拥堵时需日间补电。',
+    count: 20,
+    satisfaction: 75,
+    stress: 50,
+    energyConsumption: 80.0,
+    priceSensitivity: 0.4,
+    comfortPriority: 0.6,
+    flexibility: 0.5,
+    socialInfluence: 0.7,
+  },
+  {
+    id: 'mob-streetlamp',
+    name: '市政路灯管理',
+    domain: 'Mobility',
+    description: '负荷固定，可隔盏亮灯削峰。',
+    count: 5,
+    satisfaction: 90,
+    stress: 10,
+    energyConsumption: 20.0,
+    priceSensitivity: 0.0,
+    comfortPriority: 0.2,
+    flexibility: 0.8,
+    socialInfluence: 0.3,
+  },
+  {
+    id: 'mob-ev-station',
+    name: '充电站运营商',
+    domain: 'Mobility',
+    description: '根据电价动态调整服务费。',
+    count: 100,
+    satisfaction: 70,
+    stress: 40,
+    energyConsumption: 40.0,
+    priceSensitivity: 0.8,
+    comfortPriority: 0.0,
+    flexibility: 0.9,
+    socialInfluence: 0.5,
+  },
+  {
+    id: 'mob-water',
+    name: '水务处理厂',
+    domain: 'Mobility',
+    description: '高能耗，可将任务移至夜间。',
+    count: 8,
+    satisfaction: 85,
+    stress: 20,
+    energyConsumption: 120.0,
+    priceSensitivity: 0.6,
+    comfortPriority: 0.0,
+    flexibility: 0.7,
+    socialInfluence: 0.2,
+  },
+
+  // 5. Civic & Events
+  {
+    id: 'civ-stadium',
+    name: '大型体育馆',
+    domain: 'Civic',
+    description: '活动时脉冲式高负荷。',
+    count: 5,
+    satisfaction: 80,
+    stress: 30,
+    energyConsumption: 100.0,
+    priceSensitivity: 0.3,
+    comfortPriority: 0.8,
+    flexibility: 0.2,
+    socialInfluence: 0.9,
+  },
+  {
+    id: 'civ-tourism',
+    name: '旅游景点运营',
+    domain: 'Civic',
+    description: '受天气影响大，恶劣天气能耗低。',
+    count: 30,
+    satisfaction: 75,
+    stress: 40,
+    energyConsumption: 25.0,
+    priceSensitivity: 0.5,
+    comfortPriority: 0.7,
+    flexibility: 0.4,
+    socialInfluence: 0.6,
+  },
+  {
+    id: 'civ-hospital',
+    name: '三甲医院',
+    domain: 'Civic',
+    description: '生命线单位，不可断电，最高优先级。',
+    count: 12,
+    satisfaction: 95,
+    stress: 90,
+    energyConsumption: 60.0,
+    priceSensitivity: 0.0,
+    comfortPriority: 1.0,
+    flexibility: 0.0,
+    socialInfluence: 1.0,
+  },
+  {
+    id: 'civ-vpp',
+    name: '分布式储能云商',
+    domain: 'Civic',
+    description: '低买高卖套利，削峰填谷。',
+    count: 50,
+    satisfaction: 70,
+    stress: 30,
+    energyConsumption: -10.0, // Negative implies supply capability
+    priceSensitivity: 1.0,
+    comfortPriority: 0.0,
+    flexibility: 1.0,
+    socialInfluence: 0.4,
+  },
+];
+
+const COMPLAINT_TEMPLATES = [
+  "电价太贵了，根本用不起！",
+  "这么热的天还要限电，怎么活？",
+  "工厂又要停工了，订单怎么办？",
+  "地铁空调都不开了，热死人。",
+  "为了环保支持涨价，但希望能透明点。",
+  "家里停电了，冰箱东西全坏了！",
+  "充电费涨了三倍，开电车还不如油车。",
+  "由于电压波动，精密仪器报错了。",
+  "商场空调太足了，浪费资源。",
+  "还好装了光伏，这波涨价没受影响。",
+];
+
+export async function simulateOasisPressureTest(
+  controls: OperationsControls
+): Promise<OasisSimulationResult> {
+  try {
+    const response = await fetch('http://localhost:8000/simulate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(controls),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    // Calculate aggregated stats on frontend
+    const steps = data.steps;
+    const peakDemand = Math.max(...steps.map((s: any) => s.totalDemand));
+    const totalComplaintVolume = steps.reduce((sum: number, s: any) => sum + s.socialFeed.length, 0);
+
+    return {
+      steps: data.steps,
+      agents: data.agents,
+      aggregatedStats: {
+        peakDemand,
+        totalComplaintVolume,
+        carbonImpact: peakDemand * 0.0005, // Mock calc
+        economicLoss: totalComplaintVolume * 1000, // Mock calc
+      }
+    };
+  } catch (error) {
+    console.error('OASIS Simulation failed, falling back to mock:', error);
+    // Simulate network latency for mock
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return generateMockOasisResult(controls);
+  }
+}
+
+function generateMockOasisResult(controls: OperationsControls): OasisSimulationResult {
+  const agents: OasisAgent[] = AGENT_TEMPLATES.map(t => ({
+    ...t,
+    recentActions: [],
+    lastThought: '',
+  }));
+
+  const steps: OasisSimulationStep[] = [];
+
+  // Context factors from controls
+  const weatherStress = controls.weatherVolatility / 100; // 0-1
+  const trafficStress = controls.trafficLoad / 100;
+  const popGrowth = controls.populationDrift / 100;
+  const indGrowth = controls.industrialLoad / 100;
+  const eventStress = controls.eventLoad / 100;
+
+  // Simulate 24 hours
+  for (let hour = 0; hour < 24; hour++) {
+    const isDay = hour >= 6 && hour <= 18;
+    const isPeak = (hour >= 8 && hour <= 11) || (hour >= 18 && hour <= 22);
+    
+    let stepDemand = 0;
+    let stepSatisfaction = 0;
+    const stepFeed: OasisSimulationStep['socialFeed'] = [];
+    const activeAgents: OasisAgent[] = [];
+
+    // Environmental Price Signal (Simulated grid logic)
+    // High demand + stress = high price
+    let currentPrice = 1.0;
+    if (isPeak) currentPrice *= 1.5;
+    if (weatherStress > 0.7) currentPrice *= 1.3; // Heatwave pricing
+    if (indGrowth > 0.5) currentPrice *= 1.2;
+
+    agents.forEach(agent => {
+      // 1. Determine base load for this hour
+      let loadFactor = 1.0;
+      if (agent.domain === 'Residential') {
+        loadFactor = isPeak ? 1.5 : 0.6;
+        if (weatherStress > 0.5) loadFactor += weatherStress * 0.8; // AC load
+      } else if (agent.domain === 'Industrial') {
+        loadFactor = isDay ? 1.2 : 0.8;
+        loadFactor *= (1 + indGrowth);
+      } else if (agent.domain === 'Commercial') {
+        loadFactor = isDay ? 1.4 : 0.3;
+        if (weatherStress > 0.6) loadFactor += 0.3; // Mall AC
+      } else if (agent.domain === 'Mobility') {
+        if (agent.id === 'mob-metro' || agent.id === 'mob-bus') {
+           loadFactor = (hour === 8 || hour === 18) ? 1.8 : 1.0;
+           if (trafficStress > 0.5) loadFactor += trafficStress * 0.5;
+        }
+      } else if (agent.domain === 'Civic') {
+         if (agent.id === 'civ-stadium' && eventStress > 0.5 && hour === 20) {
+             loadFactor = 3.0; // Event spike
+         }
+      }
+
+      // 2. Agent Decision (OASIS Logic Mock)
+      // Check if price is too high for this agent
+      const pricePain = Math.max(0, currentPrice - 1.0) * agent.priceSensitivity;
+      const comfortPain = weatherStress * agent.comfortPriority;
+      
+      let action: AgentActionType = 'DO_NOTHING';
+      let consumptionModifier = 1.0;
+      let sentimentDelta = 0;
+      let thought = '';
+
+      // Logic: If pain is high, try to reduce consumption or complain
+      if (pricePain > 0.4 && agent.flexibility > 0.3) {
+        action = 'SHIFT_LOAD';
+        consumptionModifier = 0.6; // Shifted away
+        thought = `电价太高 (${currentPrice.toFixed(1)}x)，我决定推迟用电。`;
+      } else if (pricePain > 0.6 && agent.flexibility <= 0.3) {
+        action = 'POST_COMPLAINT';
+        sentimentDelta = -10;
+        thought = `电价太贵了又没法停工，太难了！`;
+      } else if (comfortPain > 0.7 && agent.comfortPriority > 0.6) {
+        action = 'ADJUST_CONSUMPTION';
+        consumptionModifier = 1.2; // Crank up AC despite price
+        thought = `太热了，不管电费了，空调开最大！`;
+      } else if (agent.id === 'civ-vpp' && currentPrice > 1.4) {
+        action = 'SELL_STORED';
+        thought = `现在电价高，正是卖电获利的好时机。`;
+      }
+
+      // 3. Update Agent State
+      agent.energyConsumption = agent.energyConsumption * loadFactor * consumptionModifier;
+      agent.satisfaction = clamp(agent.satisfaction - pricePain * 20 + (comfortPain > 0.5 && consumptionModifier > 1 ? 5 : -comfortPain * 10), 0, 100);
+      agent.lastThought = thought;
+
+      if (action !== 'DO_NOTHING') {
+        agent.recentActions.push({ type: action, timestamp: Date.now() });
+        activeAgents.push({ ...agent }); // Snapshot for UI
+      }
+
+      // 4. Generate Social Feed
+      if (action === 'POST_COMPLAINT' || (Math.random() < 0.05 && agent.satisfaction < 50)) {
+        const template = COMPLAINT_TEMPLATES[Math.floor(Math.random() * COMPLAINT_TEMPLATES.length)];
+        stepFeed.push({
+          agentId: agent.id,
+          agentName: agent.name,
+          content: template,
+          likes: Math.floor(Math.random() * 50 + agent.socialInfluence * 100),
+          sentiment: 'negative',
+        });
+      }
+
+      stepDemand += agent.energyConsumption * agent.count;
+      stepSatisfaction += agent.satisfaction;
+    });
+
+    steps.push({
+      step: hour,
+      timestamp: Date.now() + hour * 3600000,
+      totalDemand: stepDemand,
+      gridStress: clamp(stepDemand / 5000000, 0, 1), // Normalized stress
+      averageSatisfaction: stepSatisfaction / agents.length,
+      socialSentiment: stepFeed.filter(f => f.sentiment === 'negative').length * -5 + 50,
+      activeAgents: activeAgents.slice(0, 5), // Top 5 active
+      socialFeed: stepFeed.slice(0, 3), // Top 3 posts
+    });
+  }
+
+  // Calculate aggregates
+  const peakDemand = Math.max(...steps.map(s => s.totalDemand));
+  const totalComplaintVolume = steps.reduce((sum, s) => sum + s.socialFeed.length, 0);
+
+  return {
+    steps,
+    agents,
+    aggregatedStats: {
+      peakDemand,
+      totalComplaintVolume,
+      carbonImpact: peakDemand * 0.0005 * (1 + indGrowth), // Mock calc
+      economicLoss: totalComplaintVolume * 1000 + (weatherStress * 50000), // Mock calc
+    },
+  };
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -277,17 +797,53 @@ export function deriveOperationsSnapshot(
   const civicDemand = Math.round(480 + controls.eventLoad * 14 + state.census.storageSites * 12);
 
   const demand = {
-    residential: Math.round(state.census.residents * 0.16),
-    commercial: Math.round(state.census.businesses * 22 + state.census.shoppers * 0.11),
-    industrial: Math.round(state.census.factories * 4.2 + state.census.workers * 0.05),
+    // Calibrated to ~7,400 MWh/1M people/year -> ~0.84 MWh/person/hour average peak equivalent
+    // Residential: ~30% of total load
+    residential: Math.round(state.census.residents * 0.28),
+    // Commercial: ~25% of total load (businesses + shoppers)
+    commercial: Math.round(state.census.businesses * 45 + state.census.shoppers * 0.18),
+    // Industrial: ~35% of total load
+    industrial: Math.round(state.census.factories * 12.5 + state.census.workers * 0.15),
+    // Mobility & Civic: ~10% of total load
     mobility: mobilityDemand,
     civic: civicDemand,
   };
 
+  // Calculate total generation based on demand and 2025 mix targets
+  // Target: ~97,159 Total (100%)
+  // Fossil/Thermal (Fusion in game): ~64.8%
+  // Hydro (mapped to Fusion/Grid): ~13.5%
+  // Wind: ~10.8%
+  // Solar: ~5.9%
+  // Nuclear (Fusion): ~5.0%
+  // Bio: ~1.9%
+  // Other: ~1.2%
+  
+  // Game Mapping:
+  // Fusion = Thermal + Hydro + Nuclear + Wind (Base load & large scale) = 64.8 + 13.5 + 5.0 + 10.8 = 94.1%
+  // Solar = Solar = 5.9%
+  // Bio = Bio = 1.9% (scaled up slightly for visibility if needed)
+  
+  // To make the game playable, we'll adjust the generation sources to reflect this mix
+  // relative to the current demand to ensure supply meets demand initially.
+  
+  const totalDemand = demand.residential + demand.commercial + demand.industrial + demand.mobility + demand.civic;
+  // Add some buffer for storage charging
+  const targetSupply = totalDemand * 1.1; 
+
   const generation: GenerationBreakdown = {
-    solar: state.energy.dispatch.solar,
-    fusion: state.energy.dispatch.fusion,
-    bio: state.energy.dispatch.bio,
+    // Thermal (Coal/Gas): ~64.8%
+    thermal: Math.round(targetSupply * 0.648),
+    // Hydro: ~13.5%
+    hydro: Math.round(targetSupply * 0.135),
+    // Nuclear: ~5.0%
+    nuclear: Math.round(targetSupply * 0.050),
+    // Wind: ~10.8%
+    wind: Math.round(targetSupply * 0.108),
+    // Solar: ~5.9%
+    solar: Math.round(targetSupply * 0.059),
+    // Bio: ~1.9%
+    bio: Math.round(targetSupply * 0.019),
     storageDischarge: state.energy.dispatch.storageDischarge,
     recovery,
   };
@@ -314,8 +870,11 @@ export function deriveOperationsSnapshot(
       recycle: recovery,
     },
     nodes: [
+      { id: 'thermal', label: '火电基座', group: 'source', value: generation.thermal },
+      { id: 'hydro', label: '水电站', group: 'source', value: generation.hydro },
+      { id: 'nuclear', label: '核电站', group: 'source', value: generation.nuclear },
+      { id: 'wind', label: '风力场', group: 'source', value: generation.wind },
       { id: 'solar', label: '光伏阵列', group: 'source', value: generation.solar },
-      { id: 'fusion', label: '聚变基座', group: 'source', value: generation.fusion },
       { id: 'bio', label: '生物质站', group: 'source', value: generation.bio },
       { id: 'recovery', label: '回收能量', group: 'recovery', value: recovery },
       { id: 'grid', label: '城市主母线', group: 'grid', value: state.energy.supply },
@@ -326,8 +885,11 @@ export function deriveOperationsSnapshot(
       { id: 'mobility', label: '交通与公共服务', group: 'load', value: demand.mobility + demand.civic },
     ],
     links: [
+      { source: 'thermal', target: 'grid', value: generation.thermal, channel: 'electric' },
+      { source: 'hydro', target: 'grid', value: generation.hydro, channel: 'electric' },
+      { source: 'nuclear', target: 'grid', value: generation.nuclear, channel: 'electric' },
+      { source: 'wind', target: 'grid', value: generation.wind, channel: 'electric' },
       { source: 'solar', target: 'grid', value: generation.solar, channel: 'electric' },
-      { source: 'fusion', target: 'grid', value: generation.fusion, channel: 'electric' },
       { source: 'bio', target: 'grid', value: generation.bio, channel: 'thermal' },
       { source: 'recovery', target: 'storage', value: recovery, channel: 'recovery' },
       { source: 'grid', target: 'storage', value: state.energy.dispatch.storageCharge, channel: 'electric' },

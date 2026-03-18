@@ -98,6 +98,86 @@ export interface AgentProfile {
   demandShift: number;
 }
 
+// --- OASIS Agent Simulation Types ---
+
+export type AgentDomain =
+  | 'Residential'
+  | 'Industrial'
+  | 'Commercial'
+  | 'Mobility'
+  | 'Civic';
+
+export type AgentActionType =
+  | 'ADJUST_CONSUMPTION' // Rate change (-1.0 to 1.0)
+  | 'SHIFT_LOAD' // Move load to off-peak
+  | 'START_BACKUP' // Use diesel generator
+  | 'BUY_POWER' // Accept high spot price
+  | 'SELL_STORED' // VPP selling
+  | 'POST_COMPLAINT' // Social media complaint
+  | 'ENDORSE_POLICY' // Support energy policy
+  | 'DO_NOTHING';
+
+export interface AgentAction {
+  type: AgentActionType;
+  args?: Record<string, any>;
+  timestamp: number;
+}
+
+export interface OasisAgent {
+  id: string;
+  name: string;
+  domain: AgentDomain;
+  description: string;
+  count: number; // Number of represented real-world agents
+  
+  // State
+  satisfaction: number; // 0-100
+  stress: number; // 0-100
+  energyConsumption: number; // Current normalized consumption
+  
+  // Personality / Profile
+  priceSensitivity: number; // 0-1
+  comfortPriority: number; // 0-1
+  flexibility: number; // 0-1 (Ability to shift load)
+  socialInfluence: number; // 0-1
+  
+  // History
+  recentActions: AgentAction[];
+  lastThought: string; // LLM inner monologue
+}
+
+export interface OasisSimulationStep {
+  step: number; // Hour 0-23
+  timestamp: number;
+  
+  // Aggregated Metrics
+  totalDemand: number;
+  gridStress: number;
+  averageSatisfaction: number;
+  socialSentiment: number; // -100 to 100
+  
+  // Agent Updates
+  activeAgents: OasisAgent[]; // Agents who took significant actions this step
+  socialFeed: {
+    agentId: string;
+    agentName: string;
+    content: string;
+    likes: number;
+    sentiment: 'positive' | 'negative' | 'neutral';
+  }[];
+}
+
+export interface OasisSimulationResult {
+  steps: OasisSimulationStep[];
+  agents: OasisAgent[]; // Added for backend compatibility
+  aggregatedStats: {
+    peakDemand: number;
+    totalComplaintVolume: number;
+    carbonImpact: number;
+    economicLoss: number;
+  };
+}
+
 export interface FeedbackEntry {
   id: string;
   time: number;
@@ -173,7 +253,10 @@ export interface DemandBreakdown {
 
 export interface GenerationBreakdown {
   solar: number;
-  fusion: number;
+  nuclear: number;
+  thermal: number;
+  hydro: number;
+  wind: number;
   bio: number;
   storageDischarge: number;
   recovery: number;
